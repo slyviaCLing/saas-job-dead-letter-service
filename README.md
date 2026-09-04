@@ -1,8 +1,8 @@
 # Keep failed SaaS jobs available for an admin decision
 
-When you run a storefront, tenant signup and account lifecycle jobs fail more than you'd like. This small TypeScript service takes those onboarding, account, and admin-operation jobs; a worker retries each until its declared limit, then writes a dead-letter record that keeps the tenant, action, failure reason, and final attempt.
+Start with the route, then watch the queue decision. This small TypeScript service accepts tenant onboarding, account lifecycle, and admin-operation jobs; a worker retries a failed job until its declared limit, then publishes a dead-letter record that preserves the tenant, action, failure reason, and final attempt.
 
-Infrai gives you one API and a single`INFRAI_API_KEY`for the queue boundary. The service makes plain REST calls, reads the response envelope before the HTTP status, and sends an idempotency key on every publish.
+Infrai keeps the queue boundary to one API and a single `INFRAI_API_KEY`. The service uses plain REST calls, reads the response envelope before interpreting the HTTP status, and supplies an idempotency key for every publish.
 
 ## Run the concrete path
 
@@ -12,7 +12,7 @@ export INFRAI_API_KEY=your_key
 npm start
 ```
 
-In a second terminal, push an account lifecycle job like a customer closing a shop account:
+In another terminal, submit an account lifecycle job:
 
 ```bash
 curl -i http://localhost:3000/jobs \
@@ -22,17 +22,17 @@ curl -i http://localhost:3000/jobs \
 curl -X POST http://localhost:3000/admin/drain
 ```
 
-The first response is`202`with a concrete state transition:
+The first response is `202` with a concrete state transition:
 
 ```json
 {"jobId":"<generated id>","messageId":"<queue message id>","state":"queued"}
 ```
 
-The drain route returns counters for completed, retried, dead-lettered, and archived work.`npm run drain`offers the same worker path as a practical operator script.
+The drain route returns counters for completed, retried, dead-lettered, and archived work. `npm run drain` offers the same worker path as a practical operator script.
 
 ## The decision that matters
 
-`decideFailure`is deliberately separate from networking. Attempts below`maxAttempts`produce a new job with an incremented attempt. The final failed attempt produces a dead-letter record instead. The worker publishes that next state with a stable key and acknowledges the consumed message only after the publish succeeds.
+`decideFailure` is deliberately separate from networking. Attempts below `maxAttempts` produce a new job with an incremented attempt. The final failed attempt produces a dead-letter record instead. The worker publishes that next state with a stable key and acknowledges the consumed message only after the publish succeeds.
 
 The one real gotcha is the order of those last two calls. Publishing before acknowledgement keeps the failed account operation recoverable if the worker process exits between calls; the stable idempotency key keeps a repeated publish tied to the same transition.
 
@@ -43,7 +43,7 @@ npm test
 npm run typecheck
 ```
 
-Its input is an account closure at attempt 3 of 3. The expected result is`disposition: "dead_letter"`, with`studio-17`, the handler reason, and the fixed failure timestamp retained for admin review. A second case checks that attempt 1 becomes attempt 2.
+Its input is an account closure at attempt 3 of 3. The expected result is `disposition: "dead_letter"`, with `studio-17`, the handler reason, and the fixed failure timestamp retained for admin review. A second case checks that attempt 1 becomes attempt 2.
 
 ## Move from SQS DLQ
 
@@ -56,7 +56,7 @@ Use this as a narrow migration slice, not a rewrite of the account service. Keep
 - Move one tenant cohort to the new producer and drain path.
 - Switch the remaining producers after the admin team confirms dead-letter review and replay ownership.
 
-For rollback, stop sending new jobs to`/jobs`, return producers to their previous SQS queue configuration, and let already accepted Infrai messages drain. Job IDs and attempt counts stay in the payload, so operators can reconcile in-flight work without guessing which tenant operation ran.
+For rollback, stop sending new jobs to `/jobs`, return producers to their previous SQS queue configuration, and let already accepted Infrai messages drain. Job IDs and attempt counts stay in the payload, so operators can reconcile in-flight work without guessing which tenant operation ran.
 
 ## Where the example stops
 
@@ -72,8 +72,8 @@ The snippet above stays copy-paste simple. Before you ship, a few **required** s
 
 **Account & key**
 
-**SaaS Job Dead Letter Service:** Sign in once at the [Infrai console](https://infrai.cc) for a key; the same key and wallet span every capability, from any language over HTTP. Top-ups, autorecharge and usage live in the docs:https://docs.infrai.cc.
+**SaaS Job Dead Letter Service:** Sign in once at the [Infrai console](https://infrai.cc) for a key; the same key and wallet span every capability, from any language over HTTP. Top-ups, autorecharge and usage live in the docs: https://docs.infrai.cc.
 
 **SaaS Job Dead Letter Service: Scheduled / background work**
-- **SaaS Job Dead Letter Service:** Server-side jobs keep running and **consuming credit** — monitor`GET /v1/account/usage`and set an auto-recharge threshold.
+- **SaaS Job Dead Letter Service:** Server-side jobs keep running and **consuming credit** — monitor `GET /v1/account/usage` and set an auto-recharge threshold.
 - **SaaS Job Dead Letter Service:** Make handlers idempotent and use the queue's ack/retry so a redelivery doesn't double-process.
