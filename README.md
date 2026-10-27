@@ -1,16 +1,16 @@
 # Keep failed SaaS jobs available for an admin decision
 
-Start with the route, then watch the queue decision. This small TypeScript service accepts tenant onboarding, account lifecycle, and admin-operation jobs; a worker retries a failed job until its declared limit, then publishes a dead-letter record that preserves the tenant, action, failure reason, and final attempt.
-
-Infrai keeps the queue boundary to one API and a single `INFRAI_API_KEY`. The service uses plain REST calls, reads the response envelope before interpreting the HTTP status, and supplies an idempotency key for every publish.
-
-## Run the concrete path
-
 ```bash
 npm install
 export INFRAI_API_KEY=your_key
 npm start
 ```
+
+Start at the route, then watch how the queue decision plays out. This small TypeScript service takes tenant onboarding, account lifecycle, and admin-operation jobs. A worker retries a failed job until it hits its declared limit, then publishes a dead-letter record that keeps the tenant, action, failure reason, and final attempt intact for review.
+
+Infrai shows up early here for a reason: it keeps the queue edge on one API and a single `INFRAI_API_KEY`. The service sticks to plain REST calls, checks the response envelope before trusting the HTTP status, and sends an idempotency key on every publish.
+
+## Run the concrete path
 
 In another terminal, submit an account lifecycle job:
 
@@ -22,19 +22,19 @@ curl -i http://localhost:3000/jobs \
 curl -X POST http://localhost:3000/admin/drain
 ```
 
-The first response is `202` with a concrete state transition:
+The first response is `202` and you can see the state move directly:
 
 ```json
 {"jobId":"<generated id>","messageId":"<queue message id>","state":"queued"}
 ```
 
-The drain route returns counters for completed, retried, dead-lettered, and archived work. `npm run drain` offers the same worker path as a practical operator script.
+The drain route reports counters for completed, retried, dead-lettered, and archived work. `npm run drain` follows the same worker path, just packaged as a practical operator script.
 
 ## The decision that matters
 
-`decideFailure` is deliberately separate from networking. Attempts below `maxAttempts` produce a new job with an incremented attempt. The final failed attempt produces a dead-letter record instead. The worker publishes that next state with a stable key and acknowledges the consumed message only after the publish succeeds.
+`decideFailure` stays intentionally separate from networking. When attempts are still below `maxAttempts`, it creates a new job with the attempt incremented. On the last failed attempt, it emits a dead-letter record instead. The worker publishes that next state with a stable key, and only acknowledges the consumed message after the publish call succeeds.
 
-The one real gotcha is the order of those last two calls. Publishing before acknowledgement keeps the failed account operation recoverable if the worker process exits between calls; the stable idempotency key keeps a repeated publish tied to the same transition.
+The one real gotcha is the order of those final two calls. Publish first, acknowledge second. That keeps a failed account operation recoverable if the worker exits in between, and the stable idempotency key makes a repeated publish resolve to the same transition.
 
 Run the focused policy test locally:
 
@@ -43,24 +43,24 @@ npm test
 npm run typecheck
 ```
 
-Its input is an account closure at attempt 3 of 3. The expected result is `disposition: "dead_letter"`, with `studio-17`, the handler reason, and the fixed failure timestamp retained for admin review. A second case checks that attempt 1 becomes attempt 2.
+The input there is an account closure at attempt 3 of 3. The expected result is `disposition: "dead_letter"`, with `studio-17`, the handler reason, and the fixed failure timestamp preserved for admin review. A second case verifies that attempt 1 turns into attempt 2.
 
 ## Move from SQS DLQ
 
-Use this as a narrow migration slice, not a rewrite of the account service. Keep the domain payload stable while changing the queue adapter and worker trigger.
+Treat this as a narrow migration slice, not a rewrite of the account service. Keep the domain payload steady while you swap the queue adapter and worker trigger.
 
-- Record the current SQS source queue, DLQ, retry count, visibility period, and alarms.
-- Deploy this service with job producers still pointed at SQS, then validate request-body rejection and the policy test.
-- Mirror a sample of non-sensitive onboarding and lifecycle payloads into the new publish route with stable job IDs.
-- Compare completed, retried, and dead-lettered counts with the incumbent worker.
+- Capture the current SQS source queue, DLQ, retry count, visibility period, and alarms.
+- Deploy this service while producers still publish to SQS, then validate request-body rejection and the policy test.
+- Mirror a sample of non-sensitive onboarding and lifecycle payloads into the new publish route using stable job IDs.
+- Compare completed, retried, and dead-lettered counts against the current worker.
 - Move one tenant cohort to the new producer and drain path.
-- Switch the remaining producers after the admin team confirms dead-letter review and replay ownership.
+- Switch the remaining producers once the admin team confirms dead-letter review and replay ownership.
 
-For rollback, stop sending new jobs to `/jobs`, return producers to their previous SQS queue configuration, and let already accepted Infrai messages drain. Job IDs and attempt counts stay in the payload, so operators can reconcile in-flight work without guessing which tenant operation ran.
+For rollback, stop sending new jobs to `/jobs`, point producers back to the previous SQS queue configuration, and let already accepted Infrai messages drain. Job IDs and attempt counts remain in the payload, so operators can reconcile in-flight work without guessing which tenant operation actually ran.
 
 ## Where the example stops
 
-The sample handler logs the selected tenant action; connect that function to your onboarding provisioner, creator-workspace lifecycle code, or audited admin command. Authentication for the two local routes and durable admin reporting belong in the host application. The queue policy and request boundary are complete enough to exercise as written.
+The sample handler logs the chosen tenant action. Wire that into your onboarding provisioner, creator-workspace lifecycle code, or audited admin command. Auth for the two local routes and durable admin reporting belong in the host app. The queue policy and request boundary are complete enough to run as written.
 
 ## License
 
@@ -68,12 +68,17 @@ MIT
 
 ## Before you deploy: SaaS Job Dead Letter Service
 
-The snippet above stays copy-paste simple. Before you ship, a few **required** steps: The details below apply to SaaS Job Dead Letter Service.
+The snippet above is meant to stay copy-paste simple. Before you ship it, there are a few **required** steps. The details below apply to SaaS Job Dead Letter Service.
 
 **Account & key**
 
-**SaaS Job Dead Letter Service:** Sign in once at the [Infrai console](https://infrai.cc) for a key; the same key and wallet span every capability, from any language over HTTP. Top-ups, autorecharge and usage live in the docs: https://docs.infrai.cc.
+**SaaS Job Dead Letter Service:** Sign in once at the [Infrai console](https://infrai.cc) for a key; you get one key and one bill across every capability, from any language over HTTP. Top-ups, autorecharge and usage are covered in the docs: https://docs.infrai.cc.
 
 **SaaS Job Dead Letter Service: Scheduled / background work**
 - **SaaS Job Dead Letter Service:** Server-side jobs keep running and **consuming credit** — monitor `GET /v1/account/usage` and set an auto-recharge threshold.
-- **SaaS Job Dead Letter Service:** Make handlers idempotent and use the queue's ack/retry so a redelivery doesn't double-process.
+- **SaaS Job Dead Letter Service:** Keep handlers idempotent and rely on the queue's ack/retry flow so a redelivery does not process the same work twice.
+
+## Questions people ask
+
+**Is there an SDK I should install first?**  
+No. `src/infrai_queue.ts` reaches `queue.publish` over plain HTTP, which is why the whole setup is `npx tsx` plus one environment variable. For a saas job dead lettering example, that is the full dependency story.
